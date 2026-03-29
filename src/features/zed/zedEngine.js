@@ -21,7 +21,7 @@ export function lookupFare(zoneKey, cabin, level) {
 }
 
 export function estimateTax(origin, destination) {
-  const rateO = TAX_RATES[AIRPORT_COUNTRY[origin] ?? "DEFAULT"] ?? TAX_RATES.DEFAULT;
+  const rateO = TAX_RATES[AIRPORT_COUNTRY[origin]  ?? "DEFAULT"] ?? TAX_RATES.DEFAULT;
   const rateD = TAX_RATES[AIRPORT_COUNTRY[destination] ?? "DEFAULT"] ?? TAX_RATES.DEFAULT;
   return Math.max(rateO, rateD);
 }
@@ -33,8 +33,8 @@ export function calculateZedFare({ origin, destination, carrier, cabin, level })
   const zoneO = getZone(orig);
   const zoneD = getZone(dest);
 
-  if (!zoneO) return { ok: false, error: `Airport "${orig}" not found. Check the IATA code.` };
-  if (!zoneD) return { ok: false, error: `Airport "${dest}" not found. Check the IATA code.` };
+  if (!zoneO) return { ok: false, error: `"${orig}" is not a recognized airport code. Please check and try again.` };
+  if (!zoneD) return { ok: false, error: `"${dest}" is not a recognized airport code. Please check and try again.` };
 
   const zoneKey = buildZoneKey(zoneO.sub, zoneD.sub);
   const baseFare = lookupFare(zoneKey, cabin, level);
@@ -50,18 +50,10 @@ export function calculateZedFare({ origin, destination, carrier, cabin, level })
   return {
     ok: true,
     result: {
-      origin: orig,
-      destination: dest,
-      originZone: zoneO,
-      destinationZone: zoneD,
-      zoneKey,
-      carrier,
-      cabin,
-      level,
-      baseFare,
-      taxRate,
-      taxes,
-      total,
+      origin: orig, destination: dest,
+      originZone: zoneO, destinationZone: zoneD,
+      zoneKey, carrier, cabin, level,
+      baseFare, taxRate, taxes, total,
       currency: "USD",
       disclaimer:
         "Fares are estimates based on typical IATA ZED agreements. " +
