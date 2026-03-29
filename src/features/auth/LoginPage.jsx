@@ -28,8 +28,16 @@ export default function LoginPage() {
         setMode("signin");
       }
     } catch (err) {
-      setError(err.message ?? "Something went wrong.");
-    } finally {
+      const msg = err.message ?? "";
+      if (msg.includes("Invalid login")) {
+        setError("Incorrect email or password. Please try again.");
+      } else if (msg.includes("Email not confirmed")) {
+        setError("Please confirm your email before signing in.");
+      } else if (msg.includes("Too many requests")) {
+        setError("Too many attempts. Please wait a moment and try again.");
+      } else {
+        setError(msg || "Something went wrong. Please try again.");
+      }    } finally {
       setLoading(false);
     }
   }
