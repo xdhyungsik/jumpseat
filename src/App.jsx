@@ -4,6 +4,7 @@ import { useAuth } from "./hooks/useAuth";
 import AppShell from "./components/layout/AppShell";
 import LandingPage from "./features/landing/LandingPage";
 import LoginPage from "./features/auth/LoginPage";
+import ResetPasswordPage from "./features/auth/ResetPasswordPage";
 import ZedCalculator from "./features/zed/ZedCalculator";
 import ListingsPage from "./features/listings/ListingsPage";
 import JumpseatPage from "./features/jumpseat/JumpseatPage";
@@ -29,8 +30,9 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {/* Public */}
-        <Route path="/"      element={<LandingPage />} />
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/"               element={<LandingPage />} />
+        <Route path="/login"          element={<LoginPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
 
         {/* Protected */}
         <Route path="/*" element={

@@ -2,13 +2,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
-import { PlaneTakeoff } from "lucide-react";
+import { PlaneTakeoff, ArrowLeft } from "lucide-react";
 import clsx from "clsx";
 
 export default function LoginPage() {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, resetPassword } = useAuth();
   const navigate = useNavigate();
-  const [mode,     setMode]     = useState("signin"); // "signin" | "signup"
+  const [mode,     setMode]     = useState("signin"); // "signin" | "signup" | "forgot"
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
@@ -24,11 +24,15 @@ export default function LoginPage() {
     try {
       if (mode === "signin") {
         await signIn(email, password);
-      } else {
+        navigate("/zed");
+      } else if (mode === "signup") {
         await signUp(email, password);
         await signIn(email, password);
+        navigate("/zed");
+      } else if (mode === "forgot") {
+        await resetPassword(email);
+        setSuccess("Password reset email sent. Check your inbox.");
       }
-      navigate("/zed");
     } catch (err) {
       const msg = err.message ?? "";
       if (msg.includes("Invalid login")) {
@@ -44,6 +48,30 @@ export default function LoginPage() {
       setLoading(false);
     }
   }
+
+  function switchMode(newMode) {
+    setMode(newMode);
+    setError("");
+    setSuccess("");
+  }
+
+  const titles = {
+    signin: "Welcome back",
+    signup: "Create account",
+    forgot: "Reset password",
+  };
+
+  const subtitles = {
+    signin: "Sign in to access your Jumpseat account.",
+    signup: "Join Jumpseat — non-rev travel made easy.",
+    forgot: "Enter your email and we'll send you a reset link.",
+  };
+
+  const buttonLabels = {
+    signin: { idle: "Sign In →", loading: "Signing in…" },
+    signup: { idle: "Create Account →", loading: "Creating account…" },
+    forgot: { idle: "Send Reset Link →", loading: "Sending…" },
+  };
 
   return (
     <div className="min-h-screen bg-[#080c18] text-white flex items-center justify-center px-4">
@@ -63,13 +91,21 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 backdrop-blur">
+          {mode === "forgot" && (
+            <button
+              onClick={() => switchMode("signin")}
+              className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 mb-4 transition-colors"
+            >
+              <ArrowLeft size={14} />
+              Back to sign in
+            </button>
+          )}
+
           <h1 className="font-display text-2xl font-black text-white mb-1">
-            {mode === "signin" ? "Welcome back" : "Create account"}
+            {titles[mode]}
           </h1>
           <p className="text-sm text-white/40 mb-8">
-            {mode === "signin"
-              ? "Sign in to access your Jumpseat account."
-              : "Join Jumpseat — non-rev travel made easy."}
+            {subtitles[mode]}
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -87,20 +123,33 @@ export default function LoginPage() {
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400 mb-1.5">
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                minLength={6}
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-white/25 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all"
-              />
-            </div>
+            {mode !== "forgot" && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400">
+                    Password
+                  </label>
+                  {mode === "signin" && (
+                    <button
+                      type="button"
+                      onClick={() => switchMode("forgot")}
+                      className="text-xs text-white/40 hover:text-sky-400 transition-colors"
+                    >
+                      Forgot?
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  minLength={6}
+                  className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-white/25 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all"
+                />
+              </div>
+            )}
 
             {error && (
               <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
@@ -127,23 +176,25 @@ export default function LoginPage() {
               {loading
                 ? <span className="flex items-center justify-center gap-2">
                     <span className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                    {mode === "signin" ? "Signing in…" : "Creating account…"}
+                    {buttonLabels[mode].loading}
                   </span>
-                : mode === "signin" ? "Sign In →" : "Create Account →"
+                : buttonLabels[mode].idle
               }
             </button>
           </form>
 
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setError(""); setSuccess(""); }}
-              className="text-sm text-white/40 hover:text-white/70 transition-colors"
-            >
-              {mode === "signin"
-                ? "Don't have an account? Sign up"
-                : "Already have an account? Sign in"}
-            </button>
-          </div>
+          {mode !== "forgot" && (
+            <div className="mt-6 text-center">
+              <button
+                onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}
+                className="text-sm text-white/40 hover:text-white/70 transition-colors"
+              >
+                {mode === "signin"
+                  ? "Don't have an account? Sign up"
+                  : "Already have an account? Sign in"}
+              </button>
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-white/20 mt-6">
