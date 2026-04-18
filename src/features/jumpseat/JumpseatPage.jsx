@@ -1,5 +1,5 @@
 // src/features/jumpseat/JumpseatPage.jsx
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { ALL_AIRPORTS, CARRIERS } from "../zed/zedData";
 import {
   getRequests,
@@ -8,6 +8,7 @@ import {
   updateRequestPriority,
   createPassEntry,
 } from "../../lib/supabase";
+import { fetchFlightByNumber } from "../../lib/aviationstack";
 import clsx from "clsx";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -79,15 +80,26 @@ function Label({ children, htmlFor }) {
   );
 }
 
-function AirportInput({ id, placeholder, onChange }) {
-  const [query, setQuery]       = useState("");
+const AirportInput = forwardRef(function AirportInput({ id, placeholder, value, onChange }, ref) {
+  const [query, setQuery]       = useState(value || "");
   const [open, setOpen]         = useState(false);
   const [filtered, setFiltered] = useState([]);
-  const ref = useRef(null);
+  const containerRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    setValue: (v) => { setQuery(v); onChange(v); }
+  }));
+
+  useEffect(() => {
+    if (value !== undefined && value !== query) {
+      setQuery(value);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
   useEffect(() => {
     function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -105,7 +117,7 @@ function AirportInput({ id, placeholder, onChange }) {
   }
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={containerRef} className="relative">
       <input id={id} value={query} onChange={handleChange} placeholder={placeholder}
         autoComplete="off" spellCheck={false}
         className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 font-mono text-sm text-white placeholder-white/25 uppercase focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all" />
@@ -119,7 +131,7 @@ function AirportInput({ id, placeholder, onChange }) {
       )}
     </div>
   );
-}
+});
 
 function SimpleSelect({ options, value, onChange, placeholder }) {
   const [open, setOpen] = useState(false);
@@ -162,7 +174,6 @@ function AirlineSelect({ value, onChange }) {
   const ref      = useRef(null);
   const inputRef = useRef(null);
 
-  const selected = SORTED_CARRIERS.find(c => c.name === value);
   const filtered = search.trim() === ""
     ? SORTED_CARRIERS
     : SORTED_CARRIERS.filter(c =>
@@ -343,6 +354,12 @@ function NewRequestForm({ onSubmit, onClose }) {
   const [notes,   setNotes]   = useState("");
   const [saving,  setSaving]  = useState(false);
 
+  // Auto-lookup state
+  const [lookupState, setLookupState] = useState("idle"); // idle | loading | success | notfound | error
+  const lastLookupRef = useRef("");
+  const originInputRef = useRef(null);
+  const destInputRef   = useRef(null);
+
   const selectedType = REQUEST_TYPES.find(t => t.id === type);
   const canSubmit    = flight && origin.length === 3 && dest.length === 3 && date && !saving;
 
@@ -352,6 +369,40 @@ function NewRequestForm({ onSubmit, onClose }) {
     const detected = getAirlineFromFlight(val);
     if (detected && !airline) setAirline(detected.name);
   }
+
+  // Auto-lookup when flight + date are both set
+  useEffect(() => {
+    const fn = flight.trim();
+    if (fn.length < 3 || !date) {
+      setLookupState("idle");
+      return;
+    }
+    const key = `${fn}|${date}`;
+    if (key === lastLookupRef.current) return;
+
+    const timer = setTimeout(async () => {
+      lastLookupRef.current = key;
+      setLookupState("loading");
+      try {
+        const flights = await fetchFlightByNumber({ flightNumber: fn, date });
+        if (flights.length === 0) {
+          setLookupState("notfound");
+          return;
+        }
+        const f = flights[0];
+        if (f.depIata) { setOrigin(f.depIata); originInputRef.current?.setValue?.(f.depIata); }
+        if (f.arrIata) { setDest(f.arrIata);   destInputRef.current?.setValue?.(f.arrIata); }
+        if (f.airline && !airline) setAirline(f.airline);
+        setLookupState("success");
+      } catch (err) {
+        console.error("Flight lookup failed:", err);
+        setLookupState("error");
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flight, date]);
 
   async function handleSubmit() {
     setSaving(true);
@@ -405,6 +456,36 @@ function NewRequestForm({ onSubmit, onClose }) {
             )}
           </div>
 
+          {/* Date */}
+          <div>
+            <Label htmlFor="req-date">Date</Label>
+            <input id="req-date" type="date" value={date} onChange={e => setDate(e.target.value)}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all" />
+          </div>
+
+          {/* Lookup status */}
+          {lookupState === "loading" && (
+            <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-xs text-sky-400 flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full border-2 border-sky-400/30 border-t-sky-400 animate-spin" />
+              Looking up {flight}…
+            </div>
+          )}
+          {lookupState === "success" && (
+            <div className="rounded-lg border border-green-500/20 bg-green-500/5 px-3 py-2 text-xs text-green-400">
+              ✓ Route auto-filled from live schedule
+            </div>
+          )}
+          {lookupState === "notfound" && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
+              No matching flight found. Please fill in route manually.
+            </div>
+          )}
+          {lookupState === "error" && (
+            <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/40">
+              Couldn't look up flight. Please fill in route manually.
+            </div>
+          )}
+
           {/* Airline dropdown */}
           <div>
             <Label>Airline</Label>
@@ -413,15 +494,8 @@ function NewRequestForm({ onSubmit, onClose }) {
 
           {/* Route */}
           <div className="grid grid-cols-2 gap-4">
-            <div><Label>From</Label><AirportInput placeholder="JFK" onChange={setOrigin} /></div>
-            <div><Label>To</Label><AirportInput placeholder="ICN" onChange={setDest} /></div>
-          </div>
-
-          {/* Date */}
-          <div>
-            <Label htmlFor="req-date">Date</Label>
-            <input id="req-date" type="date" value={date} onChange={e => setDate(e.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all" />
+            <div><Label>From</Label><AirportInput ref={originInputRef} placeholder="JFK" value={origin} onChange={setOrigin} /></div>
+            <div><Label>To</Label><AirportInput ref={destInputRef} placeholder="ICN" value={dest} onChange={setDest} /></div>
           </div>
 
           {type === "jumpseat" && (
