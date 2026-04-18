@@ -24,8 +24,7 @@ export default function LoginPage() {
         await signIn(email, password);
       } else {
         await signUp(email, password);
-        setSuccess("Check your email to confirm your account, then sign in.");
-        setMode("signin");
+        await signIn(email, password);
       }
     } catch (err) {
       const msg = err.message ?? "";
