@@ -18,23 +18,22 @@ export async function fetchFlights({ depIata, arrIata, date }) {
     throw new Error(`"${arr}" is not a recognized airport code. Please check and try again.`);
   }
 
-  // ── MOCK MODE ──────────────────────────────────────────────────────────────
-  await new Promise(r => setTimeout(r, 600));
-  return getMockFlights(dep, arr, date);
-
-  // ── REAL API MODE (uncomment when RapidAPI quota resets) ───────────────────
-  // const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/flight-search`, {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ depIata: dep, arrIata: arr, date }),
-  // });
-  // if (!res.ok) {
-  //   const text = await res.text();
-  //   throw new Error(`API error ${res.status}: ${text}`);
-  // }
-  // const json = await res.json();
-  // if (json.error) throw new Error(json.error);
-  // return json.flights ?? [];
+// ── REAL API MODE ──────────────────────────────────────────────────────────
+const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/flight-search`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+  },
+  body: JSON.stringify({ depIata: dep, arrIata: arr, date }),
+});
+if (!res.ok) {
+  const text = await res.text();
+  throw new Error(`API error ${res.status}: ${text}`);
+}
+const json = await res.json();
+if (json.error) throw new Error(json.error);
+return json.flights ?? [];
 }
 
 function getMockFlights(dep, arr, date) {
