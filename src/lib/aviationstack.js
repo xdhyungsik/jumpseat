@@ -166,6 +166,25 @@ function getRouteDuration(dep, arr) {
   return durations[key] ?? 480;
 }
 
+export async function fetchFlightByNumber({ flightNumber, date }) {
+  const fn = flightNumber.toUpperCase().trim();
+  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/flight-search`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify({ mode: "byNumber", flightNumber: fn, date }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text}`);
+  }
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json.flights ?? [];
+}
+
 function addMinutes(isoStr, minutes) {
   return new Date(new Date(isoStr).getTime() + minutes * 60000).toISOString();
 }
@@ -199,3 +218,4 @@ export function statusMeta(status) {
     default:          return { label:"Scheduled", color:"text-white/50",  bg:"bg-white/5      border-white/10"     };
   }
 }
+
