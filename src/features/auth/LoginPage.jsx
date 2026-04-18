@@ -1,11 +1,13 @@
 // src/features/auth/LoginPage.jsx
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import { PlaneTakeoff } from "lucide-react";
 import clsx from "clsx";
 
 export default function LoginPage() {
   const { signIn, signUp } = useAuth();
+  const navigate = useNavigate();
   const [mode,     setMode]     = useState("signin"); // "signin" | "signup"
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
@@ -26,6 +28,7 @@ export default function LoginPage() {
         await signUp(email, password);
         await signIn(email, password);
       }
+      navigate("/zed");
     } catch (err) {
       const msg = err.message ?? "";
       if (msg.includes("Invalid login")) {
@@ -36,7 +39,8 @@ export default function LoginPage() {
         setError("Too many attempts. Please wait a moment and try again.");
       } else {
         setError(msg || "Something went wrong. Please try again.");
-      }    } finally {
+      }
+    } finally {
       setLoading(false);
     }
   }
