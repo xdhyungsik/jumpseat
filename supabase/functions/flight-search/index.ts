@@ -96,90 +96,89 @@ serve(async (req) => {
       const arr  = arrIata.toUpperCase();
       const minLayover = typeof minLayoverMin === "number" ? minLayoverMin : 90;
 
-      const [depRes, arrRes] = await Promise.all([
-        fetch(`https://${RAPIDAPI_HOST}/flights/airports/iata/${dep}/${from}/${to}?direction=Departure&withLeg=true&withCancelled=false&withCodeshared=false&withCargo=false&withPrivate=false`, { headers: rapidHeaders }),
-        fetch(`https://${RAPIDAPI_HOST}/flights/airports/iata/${arr}/${from}/${to}?direction=Arrival&withLeg=true&withCancelled=false&withCodeshared=false&withCargo=false&withPrivate=false`, { headers: rapidHeaders }),
-      ]);
+      function airportDeps(iata: string) {
+        return fetch(
+          `https://${RAPIDAPI_HOST}/flights/airports/iata/${iata}/${from}/${to}?direction=Departure&withLeg=true&withCancelled=false&withCodeshared=false&withCargo=false&withPrivate=false`,
+          { headers: rapidHeaders }
+        ).then(r => r.ok ? r.json() : { departures: [] })
+         .catch(() => ({ departures: [] }));
+      }
 
-      if (!depRes.ok || !arrRes.ok) {
-        const status = !depRes.ok ? depRes.status : arrRes.status;
+      // Step 1: all flights departing from origin
+      const depRes = await fetch(
+        `https://${RAPIDAPI_HOST}/flights/airports/iata/${dep}/${from}/${to}?direction=Departure&withLeg=true&withCancelled=false&withCodeshared=false&withCargo=false&withPrivate=false`,
+        { headers: rapidHeaders }
+      );
+      if (!depRes.ok) {
+        const txt = await depRes.text();
         return new Response(
-          JSON.stringify({ error: `AeroDataBox error: ${status}` }),
-          { status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({ error: `AeroDataBox error ${depRes.status}: ${txt}` }),
+          { status: depRes.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-
-      const [depJson, arrJson] = await Promise.all([depRes.json(), arrRes.json()]);
+      const depJson = await depRes.json();
       const departures: any[] = depJson.departures ?? [];
-      const arrivals:   any[] = arrJson.arrivals   ?? [];
-
-      // Index arrivals-at-dest by the via airport they departed from
-      const leg2ByVia: Record<string, any[]> = {};
-      for (const f of arrivals) {
-        const via = f.departure?.airport?.iata?.toUpperCase();
-        if (!via || via === dep) continue;
-        if (!leg2ByVia[via]) leg2ByVia[via] = [];
-        leg2ByVia[via].push(f);
-      }
-
-      const routings: any[] = [];
 
       // Direct flights
-      for (const f of departures) {
-        if (f.arrival?.airport?.iata?.toUpperCase() !== arr) continue;
-        const leg1 = mapFlight(f, date);
-        const depMs = leg1.depScheduled ? new Date(leg1.depScheduled).getTime() : 0;
-        const arrMs = leg1.arrScheduled ? new Date(leg1.arrScheduled).getTime() : 0;
-        routings.push({
-          type:       "direct",
-          leg1,
-          leg2:       null,
-          viaIata:    null,
-          viaAirport: null,
-          layoverMin: 0,
-          totalMin:   depMs && arrMs ? Math.round((arrMs - depMs) / 60000) : 0,
+      const directs = departures
+        .filter(f => f.arrival?.airport?.iata?.toUpperCase() === arr)
+        .map(f => {
+          const leg1 = mapFlight(f, date);
+          const d = leg1.depScheduled ? new Date(leg1.depScheduled).getTime() : 0;
+          const a = leg1.arrScheduled ? new Date(leg1.arrScheduled).getTime() : 0;
+          return { type: "direct", leg1, leg2: null, viaIata: null, viaAirport: null, layoverMin: 0, totalMin: d && a ? Math.round((a - d) / 60000) : 0 };
         });
-      }
 
-      // 1-stop routings
-      for (const f1 of departures) {
-        const via = f1.arrival?.airport?.iata?.toUpperCase();
+      // Step 2: collect unique via airports from origin departures (not the final dest)
+      const leg1ByVia: Record<string, any[]> = {};
+      for (const f of departures) {
+        const via = f.arrival?.airport?.iata?.toUpperCase();
         if (!via || via === arr) continue;
-        const leg2List = leg2ByVia[via];
-        if (!leg2List) continue;
+        if (!leg1ByVia[via]) leg1ByVia[via] = [];
+        leg1ByVia[via].push(f);
+      }
+      const viaAirports = Object.keys(leg1ByVia).slice(0, 10);
 
-        const leg1ArrMs = f1.arrival?.scheduledTime?.utc
-          ? new Date(f1.arrival.scheduledTime.utc).getTime() : 0;
-        if (!leg1ArrMs) continue;
+      // Step 3: fetch departures from each via airport in parallel
+      const viaResults = await Promise.allSettled(
+        viaAirports.map(via => airportDeps(via))
+      );
 
-        for (const f2 of leg2List) {
-          const leg2DepMs = f2.departure?.scheduledTime?.utc
-            ? new Date(f2.departure.scheduledTime.utc).getTime() : 0;
-          const leg2ArrMs = f2.arrival?.scheduledTime?.utc
-            ? new Date(f2.arrival.scheduledTime.utc).getTime() : 0;
-          if (!leg2DepMs || !leg2ArrMs) continue;
+      // Step 4: match leg1 + leg2 with valid connection windows
+      const oneStops: any[] = [];
+      for (let i = 0; i < viaAirports.length; i++) {
+        const via = viaAirports[i];
+        const result = viaResults[i];
+        if (result.status !== "fulfilled") continue;
+        const viaFlights: any[] = result.value.departures ?? [];
+        const toArr = viaFlights.filter(f => f.arrival?.airport?.iata?.toUpperCase() === arr);
+        if (toArr.length === 0) continue;
 
-          const layoverMin = Math.round((leg2DepMs - leg1ArrMs) / 60000);
-          if (layoverMin < minLayover || layoverMin > 480) continue;
-
-          const leg1DepMs = f1.departure?.scheduledTime?.utc
-            ? new Date(f1.departure.scheduledTime.utc).getTime() : 0;
-          const totalMin = leg1DepMs && leg2ArrMs
-            ? Math.round((leg2ArrMs - leg1DepMs) / 60000) : 0;
-
-          routings.push({
-            type:       "oneStop",
-            leg1:       mapFlight(f1, date),
-            leg2:       mapFlight(f2, date),
-            viaIata:    via,
-            viaAirport: f1.arrival?.airport?.name ?? via,
-            layoverMin,
-            totalMin,
-          });
+        for (const f1 of leg1ByVia[via]) {
+          const leg1ArrMs = f1.arrival?.scheduledTime?.utc ? new Date(f1.arrival.scheduledTime.utc).getTime() : 0;
+          if (!leg1ArrMs) continue;
+          for (const f2 of toArr) {
+            const leg2DepMs = f2.departure?.scheduledTime?.utc ? new Date(f2.departure.scheduledTime.utc).getTime() : 0;
+            const leg2ArrMs = f2.arrival?.scheduledTime?.utc  ? new Date(f2.arrival.scheduledTime.utc).getTime()   : 0;
+            if (!leg2DepMs || !leg2ArrMs) continue;
+            const layoverMin = Math.round((leg2DepMs - leg1ArrMs) / 60000);
+            if (layoverMin < minLayover || layoverMin > 480) continue;
+            const leg1DepMs = f1.departure?.scheduledTime?.utc ? new Date(f1.departure.scheduledTime.utc).getTime() : 0;
+            const totalMin  = leg1DepMs && leg2ArrMs ? Math.round((leg2ArrMs - leg1DepMs) / 60000) : 0;
+            oneStops.push({
+              type:       "oneStop",
+              leg1:       mapFlight(f1, date),
+              leg2:       mapFlight(f2, date),
+              viaIata:    via,
+              viaAirport: f1.arrival?.airport?.name ?? via,
+              layoverMin,
+              totalMin,
+            });
+          }
         }
       }
 
-      routings.sort((a, b) => a.totalMin - b.totalMin);
+      const routings = [...directs, ...oneStops].sort((a, b) => a.totalMin - b.totalMin);
 
       return new Response(
         JSON.stringify({ routings }),
