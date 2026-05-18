@@ -1,19 +1,24 @@
 // src/features/routings/RoutingsPage.jsx
 import { useState, useCallback, useRef, useEffect } from "react";
-import { fetchRoutings } from "../../lib/aviationstack";
+import { fetchRoutings, formatTime } from "../../lib/aviationstack";
 import { ALL_AIRPORTS } from "../zed/zedData";
 import clsx from "clsx";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmtDuration(mins) {
-  if (!mins) return null;
+function fmtMins(mins) {
+  if (!mins || mins <= 0) return null;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
 function uniq(arr) { return [...new Set(arr.filter(Boolean))]; }
+
+function utcToLocalHHMM(utcStr) {
+  if (!utcStr) return null;
+  return new Date(utcStr).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
 
 // ─── Airport Input ────────────────────────────────────────────────────────────
 
@@ -57,22 +62,23 @@ function AirportInput({ id, placeholder, onChange }) {
   );
 }
 
-// ─── Airline Badge ─────────────────────────────────────────────────────────────
+// ─── Carrier Chip ─────────────────────────────────────────────────────────────
 
-function Carrier({ code }) {
+function Carrier({ code, highlight }) {
   if (!code) return null;
   return (
-    <span className="inline-flex items-center justify-center w-7 h-5 rounded bg-white/10 text-[10px] font-mono font-bold text-white/70">
+    <span className={clsx(
+      "inline-flex items-center justify-center w-7 h-5 rounded text-[10px] font-mono font-bold transition-colors",
+      highlight ? "bg-sky-500/30 text-sky-300 border border-sky-500/40" : "bg-white/10 text-white/70"
+    )}>
       {code}
     </span>
   );
 }
 
-// ─── Routing Path Display ─────────────────────────────────────────────────────
+// ─── Path Row ─────────────────────────────────────────────────────────────────
 
-function PathRow({ stops, carriers }) {
-  // stops = ["DFW", "ATL", "ORD"]
-  // carriers = [["AA"], ["DL"]] — one entry per segment
+function PathRow({ stops, carriers, airlineFilter }) {
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
       {stops.map((iata, i) => (
@@ -80,7 +86,9 @@ function PathRow({ stops, carriers }) {
           <span className="font-mono text-sm font-black text-white">{iata}</span>
           {i < stops.length - 1 && (
             <div className="flex items-center gap-1">
-              {(carriers[i] ?? []).map(c => <Carrier key={c} code={c} />)}
+              {(carriers[i] ?? []).map(c => (
+                <Carrier key={c} code={c} highlight={airlineFilter && c === airlineFilter.toUpperCase()} />
+              ))}
               <span className="text-white/20 text-xs">→</span>
             </div>
           )}
@@ -96,8 +104,7 @@ function Section({ label, count, color = "text-white/40", defaultOpen = true, ch
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div>
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 mb-3 group">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-3 mb-3">
         <span className={clsx("text-xs font-semibold uppercase tracking-widest", color)}>{label}</span>
         <span className="text-xs font-mono text-white/20 border border-white/10 rounded px-1.5 py-0.5">{count}</span>
         <div className="h-px flex-1 bg-white/5" />
@@ -108,74 +115,139 @@ function Section({ label, count, color = "text-white/40", defaultOpen = true, ch
   );
 }
 
+// ─── Individual Flight Row (shown inside expanded cards) ──────────────────────
+
+function FlightRow({ r }) {
+  const dep1 = formatTime(r.leg1?.depScheduled);
+  const arr1 = formatTime(r.leg1?.arrScheduled);
+  const dep2 = r.leg2 ? formatTime(r.leg2?.depScheduled) : null;
+  const arr2 = r.leg2 ? formatTime(r.leg2?.arrScheduled) : null;
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-white/[0.03] border border-white/5 text-xs font-mono">
+      {/* Leg 1 */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-white/30">{r.leg1?.airlineIata}</span>
+        <span className="text-white font-bold">{dep1}</span>
+        <span className="text-white/20">→</span>
+        <span className="text-white font-bold">{arr1}</span>
+        <span className="text-white/25 text-[10px]">{r.leg1?.flightNumber}</span>
+      </div>
+
+      {/* Layover */}
+      {r.leg2 && (
+        <>
+          <div className="h-px flex-1 bg-white/10" />
+          <span className="text-white/30 whitespace-nowrap">{fmtMins(r.layoverMin)} cnx</span>
+          <div className="h-px flex-1 bg-white/10" />
+        </>
+      )}
+
+      {/* Leg 2 */}
+      {r.leg2 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-white/30">{r.leg2?.airlineIata}</span>
+          <span className="text-white font-bold">{dep2}</span>
+          <span className="text-white/20">→</span>
+          <span className="text-white font-bold">{arr2}</span>
+          <span className="text-white/25 text-[10px]">{r.leg2?.flightNumber}</span>
+        </div>
+      )}
+
+      <div className="ml-auto text-white/20 whitespace-nowrap">{fmtMins(r.totalMin)}</div>
+    </div>
+  );
+}
+
 // ─── Direct Card ─────────────────────────────────────────────────────────────
 
-function DirectCard({ routings, dep, arr }) {
+function DirectCard({ routings, dep, arr, airlineFilter }) {
+  const [expanded, setExpanded] = useState(false);
   const carriers = uniq(routings.map(r => r.leg1?.airlineIata));
-  const count    = routings.length;
+  const sorted   = [...routings].sort((a, b) => (a.leg1?.depScheduled ?? "").localeCompare(b.leg1?.depScheduled ?? ""));
   const minMins  = Math.min(...routings.map(r => r.totalMin).filter(Boolean));
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4 flex items-center justify-between gap-4">
-      <div className="flex flex-col gap-2">
-        <PathRow stops={[dep, arr]} carriers={[carriers]} />
-        <div className="flex items-center gap-2">
-          {carriers.map(c => <Carrier key={c} code={c} />)}
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
+      <button onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/[0.03] transition-colors text-left">
+        <div className="flex flex-col gap-2">
+          <PathRow stops={[dep, arr]} carriers={[carriers]} airlineFilter={airlineFilter} />
+          <div className="flex items-center gap-1.5">
+            {carriers.map(c => <Carrier key={c} code={c} highlight={airlineFilter && c === airlineFilter.toUpperCase()} />)}
+          </div>
         </div>
-      </div>
-      <div className="text-right shrink-0">
-        <div className="text-sm font-bold text-white">{count} flight{count !== 1 ? "s" : ""}</div>
-        {minMins > 0 && <div className="text-xs text-white/30">fastest {fmtDuration(minMins)}</div>}
-      </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="text-right">
+            <div className="text-sm font-bold text-white">{routings.length} flight{routings.length !== 1 ? "s" : ""}</div>
+            {minMins > 0 && <div className="text-xs text-white/30">fastest {fmtMins(minMins)}</div>}
+          </div>
+          <span className={clsx("text-white/20 text-xs transition-transform", !expanded && "-rotate-90")}>▾</span>
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-4 flex flex-col gap-1.5 border-t border-white/5 pt-3">
+          {sorted.map((r, i) => <FlightRow key={i} r={r} />)}
+        </div>
+      )}
     </div>
   );
 }
 
-// ─── 1-Stop Group Card ────────────────────────────────────────────────────────
+// ─── 1-Stop Card ─────────────────────────────────────────────────────────────
 
-function OneStopCard({ via, routings, dep, arr }) {
+function OneStopCard({ via, routings, dep, arr, airlineFilter }) {
+  const [expanded, setExpanded] = useState(false);
   const leg1Carriers = uniq(routings.map(r => r.leg1?.airlineIata));
   const leg2Carriers = uniq(routings.map(r => r.leg2?.airlineIata));
-  const count        = routings.length;
+  const viaName      = routings[0]?.viaAirport ?? via;
   const minMins      = Math.min(...routings.map(r => r.totalMin).filter(Boolean));
   const minLayover   = Math.min(...routings.map(r => r.layoverMin).filter(Boolean));
-  const viaName      = routings[0]?.viaAirport ?? via;
+  const sorted       = [...routings].sort((a, b) => (a.leg1?.depScheduled ?? "").localeCompare(b.leg1?.depScheduled ?? ""));
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4 flex items-center justify-between gap-4">
-      <div className="flex flex-col gap-2">
-        <PathRow stops={[dep, via, arr]} carriers={[leg1Carriers, leg2Carriers]} />
-        <div className="text-xs text-white/30">{viaName}</div>
-      </div>
-      <div className="text-right shrink-0">
-        <div className="text-sm font-bold text-white">{count} option{count !== 1 ? "s" : ""}</div>
-        <div className="text-xs text-white/30">
-          {minMins > 0 && `best ${fmtDuration(minMins)}`}
-          {minLayover > 0 && ` · ${fmtDuration(minLayover)} min cnx`}
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
+      <button onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/[0.03] transition-colors text-left">
+        <div className="flex flex-col gap-1.5">
+          <PathRow stops={[dep, via, arr]} carriers={[leg1Carriers, leg2Carriers]} airlineFilter={airlineFilter} />
+          <div className="text-xs text-white/30">{viaName}</div>
         </div>
-      </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="text-right">
+            <div className="text-sm font-bold text-white">{routings.length} option{routings.length !== 1 ? "s" : ""}</div>
+            <div className="text-xs text-white/30">
+              {minMins > 0 && `best ${fmtMins(minMins)}`}
+              {minLayover > 0 && ` · ${fmtMins(minLayover)} min cnx`}
+            </div>
+          </div>
+          <span className={clsx("text-white/20 text-xs transition-transform", !expanded && "-rotate-90")}>▾</span>
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-4 flex flex-col gap-1.5 border-t border-white/5 pt-3">
+          {sorted.map((r, i) => <FlightRow key={i} r={r} />)}
+        </div>
+      )}
     </div>
   );
 }
 
-// ─── 2-Stop Card ──────────────────────────────────────────────────────────────
+// ─── 2-Stop Card ─────────────────────────────────────────────────────────────
 
-function TwoStopCard({ routing, dep, arr }) {
+function TwoStopCard({ routing, dep, arr, airlineFilter }) {
   const { via1Iata, via1Airport, via2Iata, via2Airport, leg1Carriers, leg2Carriers, leg3Carriers } = routing;
-
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4 flex items-center justify-between gap-4">
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5">
         <PathRow
           stops={[dep, via1Iata, via2Iata, arr]}
           carriers={[leg1Carriers ?? [], leg2Carriers ?? [], leg3Carriers ?? []]}
+          airlineFilter={airlineFilter}
         />
         <div className="text-xs text-white/30">{via1Airport} → {via2Airport}</div>
       </div>
-      <div className="text-right shrink-0">
-        <div className="text-xs text-white/30">path exists</div>
-        <div className="text-xs text-white/20">check timings</div>
-      </div>
+      <div className="text-right shrink-0 text-xs text-white/25">path exists</div>
     </div>
   );
 }
@@ -183,14 +255,16 @@ function TwoStopCard({ routing, dep, arr }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function RoutingsPage() {
-  const [origin,      setOrigin]      = useState("");
-  const [destination, setDestination] = useState("");
-  const [date,        setDate]        = useState(today());
-  const [minLayover,  setMinLayover]  = useState(90);
-  const [routings,    setRoutings]    = useState([]);
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState(null);
-  const [searched,    setSearched]    = useState(false);
+  const [origin,        setOrigin]        = useState("");
+  const [destination,   setDestination]   = useState("");
+  const [date,          setDate]          = useState(today());
+  const [afterTime,     setAfterTime]     = useState("");
+  const [airlineFilter, setAirlineFilter] = useState("");
+  const [minLayover,    setMinLayover]    = useState(90);
+  const [allRoutings,   setAllRoutings]   = useState([]);
+  const [loading,       setLoading]       = useState(false);
+  const [error,         setError]         = useState(null);
+  const [searched,      setSearched]      = useState(false);
 
   function today() { return new Date().toISOString().split("T")[0]; }
 
@@ -198,12 +272,12 @@ export default function RoutingsPage() {
 
   const handleSearch = useCallback(async () => {
     setError(null);
-    setRoutings([]);
+    setAllRoutings([]);
     setLoading(true);
     setSearched(true);
     try {
       const results = await fetchRoutings({ depIata: origin, arrIata: destination, date, minLayoverMin: minLayover });
-      setRoutings(results);
+      setAllRoutings(results);
     } catch (err) {
       setError(err.message ?? "Failed to fetch routings.");
     } finally {
@@ -211,12 +285,29 @@ export default function RoutingsPage() {
     }
   }, [origin, destination, date, minLayover]);
 
-  // Group routings
+  // ── Client-side filters ───────────────────────────────────────────────────
+  const airline = airlineFilter.toUpperCase().trim();
+
+  const routings = allRoutings.filter(r => {
+    // Airline filter
+    if (airline) {
+      if (r.type === "direct")  return r.leg1?.airlineIata === airline;
+      if (r.type === "oneStop") return r.leg1?.airlineIata === airline && r.leg2?.airlineIata === airline;
+      if (r.type === "twoStop") return (r.leg1Carriers ?? []).includes(airline) && (r.leg2Carriers ?? []).includes(airline) && (r.leg3Carriers ?? []).includes(airline);
+    }
+    // Leave-after filter
+    if (afterTime) {
+      const depMs   = r.leg1?.depScheduled ? new Date(r.leg1.depScheduled).getTime() : 0;
+      const cutoff  = new Date(`${date}T${afterTime}`).getTime();
+      if (!depMs || depMs < cutoff) return false;
+    }
+    return true;
+  });
+
   const directs  = routings.filter(r => r.type === "direct");
   const oneStops = routings.filter(r => r.type === "oneStop");
   const twoStops = routings.filter(r => r.type === "twoStop");
 
-  // Group 1-stops by via airport
   const oneStopGroups = {};
   for (const r of oneStops) {
     if (!oneStopGroups[r.viaIata]) oneStopGroups[r.viaIata] = [];
@@ -228,7 +319,7 @@ export default function RoutingsPage() {
     return minA - minB;
   });
 
-  const hasResults = routings.length > 0;
+  const hasResults = directs.length > 0 || oneStopVias.length > 0 || twoStops.length > 0;
 
   return (
     <div className="min-h-screen bg-[#080c18] text-white">
@@ -238,7 +329,6 @@ export default function RoutingsPage() {
       }} />
 
       <main className="relative z-10 mx-auto max-w-2xl px-6 py-12">
-        {/* Title */}
         <div className="mb-10">
           <h1 className="font-display text-4xl font-black tracking-tight leading-none">
             Possible<br /><span className="text-sky-400">Routings</span>
@@ -250,6 +340,7 @@ export default function RoutingsPage() {
 
         {/* Search form */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur mb-8">
+          {/* Route */}
           <div className="grid grid-cols-2 gap-4 mb-5">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400 mb-1.5">From</label>
@@ -261,11 +352,38 @@ export default function RoutingsPage() {
             </div>
           </div>
 
+          {/* Date + leave after */}
           <div className="grid grid-cols-2 gap-4 mb-5">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400 mb-1.5">Date</label>
               <input type="date" value={date} onChange={e => setDate(e.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400 mb-1.5">
+                Leave after <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
+              </label>
+              <input type="time" value={afterTime} onChange={e => setAfterTime(e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all" />
+            </div>
+          </div>
+
+          {/* Airline filter + min connection */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400 mb-1.5">
+                My airline <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
+              </label>
+              <input
+                value={airlineFilter}
+                onChange={e => setAirlineFilter(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 2))}
+                placeholder="AA"
+                autoComplete="off"
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 font-mono text-sm text-white placeholder-white/25 uppercase focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40 transition-all"
+              />
+              {airlineFilter && (
+                <p className="text-[10px] text-white/30 mt-1">Showing only {airlineFilter}-operated segments</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-widest text-sky-400 mb-1.5">Min connection</label>
@@ -293,12 +411,31 @@ export default function RoutingsPage() {
             {loading
               ? <span className="flex items-center justify-center gap-2">
                   <span className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Searching…
+                  Searching… (~15s)
                 </span>
               : "Find Routings →"
             }
           </button>
         </div>
+
+        {/* Active filters badge */}
+        {searched && !loading && (airline || afterTime) && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-white/30">Filters:</span>
+            {airline && (
+              <span className="text-xs bg-sky-500/10 border border-sky-500/20 text-sky-400 rounded-full px-2.5 py-0.5">
+                {airline} only
+                <button onClick={() => setAirlineFilter("")} className="ml-1.5 text-sky-400/60 hover:text-sky-300">×</button>
+              </span>
+            )}
+            {afterTime && (
+              <span className="text-xs bg-white/5 border border-white/10 text-white/40 rounded-full px-2.5 py-0.5">
+                after {afterTime}
+                <button onClick={() => setAfterTime("")} className="ml-1.5 text-white/30 hover:text-white/60">×</button>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Error */}
         {error && (
@@ -309,44 +446,44 @@ export default function RoutingsPage() {
         {searched && !loading && !error && (
           hasResults ? (
             <div className="space-y-8">
-              {/* Direct */}
               {directs.length > 0 && (
-                <Section label="Direct" count={directs.length} color="text-sky-400" defaultOpen={true}>
-                  <DirectCard routings={directs} dep={origin} arr={destination} />
+                <Section label="Direct" count={directs.length} color="text-sky-400">
+                  <DirectCard routings={directs} dep={origin} arr={destination} airlineFilter={airline} />
                 </Section>
               )}
 
-              {/* 1-Stop */}
               {oneStopVias.length > 0 && (
-                <Section label="1-Stop" count={oneStopVias.length + " via"} color="text-white/60" defaultOpen={true}>
+                <Section label="1-Stop" count={`${oneStopVias.length} via`} color="text-white/60">
                   {oneStopVias.map(via => (
-                    <OneStopCard key={via} via={via} routings={oneStopGroups[via]} dep={origin} arr={destination} />
+                    <OneStopCard key={via} via={via} routings={oneStopGroups[via]} dep={origin} arr={destination} airlineFilter={airline} />
                   ))}
                 </Section>
               )}
 
-              {/* 2-Stop */}
               {twoStops.length > 0 && (
-                <Section label="2-Stop" count={twoStops.length + " paths"} color="text-white/40" defaultOpen={false}>
+                <Section label="2-Stop" count={`${twoStops.length} paths`} color="text-white/40" defaultOpen={false}>
                   {twoStops.map((r, i) => (
-                    <TwoStopCard key={i} routing={r} dep={origin} arr={destination} />
+                    <TwoStopCard key={i} routing={r} dep={origin} arr={destination} airlineFilter={airline} />
                   ))}
                 </Section>
               )}
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-white/[0.03] px-6 py-16 text-center">
-              <div className="text-white/40 text-sm">No routings found for this date.</div>
-              <div className="text-white/25 text-xs mt-1">Try a different date or loosen the connection time.</div>
+              <div className="text-white/40 text-sm">
+                {allRoutings.length > 0 ? "No routings match your filters." : "No routings found for this date."}
+              </div>
+              <div className="text-white/25 text-xs mt-1">
+                {allRoutings.length > 0 ? "Try clearing the airline or time filter." : "Try a different date or loosen the connection time."}
+              </div>
             </div>
           )
         )}
 
-        {/* Initial state */}
         {!searched && (
           <div className="rounded-xl border border-white/10 bg-white/[0.03] px-6 py-16 text-center">
             <div className="text-white/40 text-sm">Enter a route to find all possible connections.</div>
-            <div className="text-white/25 text-xs mt-1">Direct · 1-Stop · 2-Stop — sorted by travel time.</div>
+            <div className="text-white/25 text-xs mt-1">Direct · 1-Stop · 2-Stop — tap any result to see flights.</div>
           </div>
         )}
       </main>
