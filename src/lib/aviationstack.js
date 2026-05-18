@@ -166,6 +166,24 @@ function getRouteDuration(dep, arr) {
   return durations[key] ?? 480;
 }
 
+export async function fetchRoutings({ depIata, arrIata, date, minLayoverMin = 90 }) {
+  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/flight-search`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify({ mode: "alternates", depIata, arrIata, date, minLayoverMin }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text}`);
+  }
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json.routings ?? [];
+}
+
 export async function fetchFlightByNumber({ flightNumber, date }) {
   const fn = flightNumber.toUpperCase().trim();
   const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/flight-search`, {

@@ -1,13 +1,14 @@
 // src/components/layout/AppShell.jsx
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
-import { Calculator, PlaneTakeoff, ClipboardList, BookOpen, User, LogOut, ChevronDown } from "lucide-react";
+import { Calculator, PlaneTakeoff, ClipboardList, BookOpen, User, LogOut, ChevronDown, Waypoints } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import clsx from "clsx";
 
 const NAV_ITEMS = [
   { path: "/zed",      label: "ZED Fares", icon: Calculator    },
   { path: "/listings", label: "Flights",   icon: PlaneTakeoff  },
+  { path: "/routings", label: "Routings",  icon: Waypoints     },
   { path: "/jumpseat", label: "Requests",  icon: ClipboardList },
   { path: "/passbook", label: "Pass Log",  icon: BookOpen      },
 ];
