@@ -9,6 +9,7 @@ import ZedCalculator from "./features/zed/ZedCalculator";
 import ListingsPage from "./features/listings/ListingsPage";
 import JumpseatPage from "./features/jumpseat/JumpseatPage";
 import PassbookPage from "./features/passbook/PassbookPage";
+import RoutingsPage from "./features/routings/RoutingsPage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -42,7 +43,8 @@ export default function App() {
                 <Route path="/zed"      element={<ZedCalculator />} />
                 <Route path="/listings" element={<ListingsPage />} />
                 <Route path="/jumpseat" element={<JumpseatPage />} />
-                <Route path="/passbook" element={<PassbookPage />} />
+                <Route path="/passbook"  element={<PassbookPage />} />
+                <Route path="/routings" element={<RoutingsPage />} />
                 <Route path="*"         element={<Navigate to="/zed" replace />} />
               </Routes>
             </AppShell>
