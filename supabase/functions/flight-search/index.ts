@@ -103,20 +103,24 @@ serve(async (req) => {
       const altP = "direction=Departure&withLeg=true&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false";
       const altBase = `https://${RAPIDAPI_HOST}/flights/airports/iata`;
 
-      async function getDeps(iata: string): Promise<any[]> {
-        const urlAm = `${altBase}/${iata}/${altAmFrom}/${altAmTo}?${altP}`;
-        const urlPm = `${altBase}/${iata}/${altPmFrom}/${altPmTo}?${altP}`;
-        const [rAm, rPm] = await Promise.all([
-          fetch(urlAm, { headers: rapidHeaders }).catch(() => null),
-          fetch(urlPm, { headers: rapidHeaders }).catch(() => null),
-        ]);
-        const dAm: any[] = (rAm?.ok ? (await rAm.json()).departures : null) ?? [];
-        const dPm: any[] = (rPm?.ok ? (await rPm.json()).departures : null) ?? [];
-        return [...dAm, ...dPm];
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+      // Single API call — stays within 12h window and 1 req/sec rate limit
+      async function fetchWindow(iata: string, from: string, to: string): Promise<any[]> {
+        const url = `${altBase}/${iata}/${from}/${to}?${altP}`;
+        try {
+          const r = await fetch(url, { headers: rapidHeaders });
+          if (!r.ok) return [];
+          const j = await r.json();
+          return j.departures ?? [];
+        } catch { return []; }
       }
 
-      // Step 1: get all departures from origin
-      const originDeps = await getDeps(altDep);
+      // Step 1: origin departures — AM then PM, sequential to respect rate limit
+      const originAm = await fetchWindow(altDep, altAmFrom, altAmTo);
+      await sleep(1100);
+      const originPm = await fetchWindow(altDep, altPmFrom, altPmTo);
+      const originDeps = [...originAm, ...originPm];
 
       // Separate directs from connections
       const directs = originDeps
@@ -136,15 +140,31 @@ serve(async (req) => {
         if (!leg1ByVia[via]) leg1ByVia[via] = [];
         leg1ByVia[via].push(f);
       }
-      const vias = Object.keys(leg1ByVia).slice(0, 8);
+      // Prioritize major hubs — they're far more likely to have onward connections
+      const HUBS = new Set(["ATL","DEN","LAX","SFO","JFK","EWR","ORD","CLT","MSP","DTW","PHX","SEA","IAH","BOS","LAS","MIA","PHL","SLC","BWI","DCA","MDW","DAL","LGA","PDX","SAN","TPA","MCO","AUS","STL","MCI","RDU","BNA","MEM","MSY"]);
+      const allVias = Object.keys(leg1ByVia).filter(v => v !== altArr && v !== altDep);
+      const vias = [
+        ...allVias.filter(v => HUBS.has(v)),
+        ...allVias.filter(v => !HUBS.has(v)),
+      ].slice(0, 12);
 
-      // Step 2: for each via airport, get its departures (sequential to avoid rate limits)
+      // Step 2: fetch via airport departures sequentially with rate-limit spacing.
+      // Only fetch the PM window (noon–midnight) since connections happen after arrival.
+      const viaDepsMap: Record<string, any[]> = {};
+      for (const via of vias) {
+        await sleep(1100);
+        viaDepsMap[via] = await fetchWindow(via, altPmFrom, altPmTo);
+      }
+
+      // Which fetched airports have service to the final destination?
+      const airsToFinal = new Set<string>(
+        vias.filter(v => (viaDepsMap[v] ?? []).some((f: any) => f.arrival?.airport?.iata?.toUpperCase() === altArr))
+      );
+
+      // 1-stop: match valid connections
       const oneStops: any[] = [];
       for (const via of vias) {
-        let viaDeps: any[] = [];
-        try { viaDeps = await getDeps(via); } catch { /* skip */ }
-
-        const toFinal = viaDeps.filter((f: any) => f.arrival?.airport?.iata?.toUpperCase() === altArr);
+        const toFinal = (viaDepsMap[via] ?? []).filter((f: any) => f.arrival?.airport?.iata?.toUpperCase() === altArr);
         for (const f1 of leg1ByVia[via]) {
           const arrMs1 = f1.arrival?.scheduledTime?.utc ? new Date(f1.arrival.scheduledTime.utc).getTime() : 0;
           if (!arrMs1) continue;
@@ -169,7 +189,38 @@ serve(async (req) => {
         }
       }
 
-      const routings = [...directs, ...oneStops].sort((a: any, b: any) => a.totalMin - b.totalMin);
+      // 2-stop: DFW → via1 → via2 → ORD
+      // via2 must be a fetched airport that has service to the final destination
+      const twoStopPaths = new Set<string>();
+      const twoStops: any[] = [];
+      for (const via1 of vias) {
+        const via1Deps = viaDepsMap[via1] ?? [];
+        for (const f of via1Deps) {
+          const via2: string = f.arrival?.airport?.iata?.toUpperCase() ?? "";
+          if (!via2 || via2 === altArr || via2 === altDep || via2 === via1) continue;
+          if (!airsToFinal.has(via2)) continue;
+          const pathKey = `${via1}|${via2}`;
+          if (twoStopPaths.has(pathKey)) continue;
+          twoStopPaths.add(pathKey);
+
+          const leg1Carriers = [...new Set((leg1ByVia[via1] ?? []).map((f1: any) => f1.airline?.iata ?? "").filter(Boolean))];
+          const leg2Carriers = [...new Set(via1Deps.filter((f2: any) => f2.arrival?.airport?.iata?.toUpperCase() === via2).map((f2: any) => f2.airline?.iata ?? "").filter(Boolean))];
+          const leg3Carriers = [...new Set((viaDepsMap[via2] ?? []).filter((f3: any) => f3.arrival?.airport?.iata?.toUpperCase() === altArr).map((f3: any) => f3.airline?.iata ?? "").filter(Boolean))];
+
+          twoStops.push({
+            type:         "twoStop",
+            via1Iata:     via1,
+            via1Airport:  f.departure?.airport?.name ?? via1,
+            via2Iata:     via2,
+            via2Airport:  f.arrival?.airport?.name ?? via2,
+            leg1Carriers,
+            leg2Carriers,
+            leg3Carriers,
+          });
+        }
+      }
+
+      const routings = [...directs, ...oneStops, ...twoStops].sort((a: any, b: any) => (a.totalMin ?? 9999) - (b.totalMin ?? 9999));
       return new Response(
         JSON.stringify({ routings }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
