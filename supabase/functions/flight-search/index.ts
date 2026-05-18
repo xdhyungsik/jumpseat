@@ -9,15 +9,80 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function mapFlight(f: any, date: string) {
+  return {
+    flightNumber: f.number ?? "—",
+    airline:      f.airline?.name ?? "Unknown",
+    airlineIata:  f.airline?.iata ?? "",
+    status:       f.status ?? "unknown",
+    depAirport:   f.departure?.airport?.name ?? "",
+    depIata:      f.departure?.airport?.iata ?? "",
+    depScheduled: f.departure?.scheduledTime?.utc ?? null,
+    depEstimated: f.departure?.revisedTime?.utc ?? null,
+    depActual:    f.departure?.actualTime?.utc ?? null,
+    depTerminal:  f.departure?.terminal ?? null,
+    depGate:      f.departure?.gate ?? null,
+    arrAirport:   f.arrival?.airport?.name ?? "",
+    arrIata:      f.arrival?.airport?.iata ?? "",
+    arrScheduled: f.arrival?.scheduledTime?.utc ?? null,
+    arrEstimated: f.arrival?.revisedTime?.utc ?? null,
+    arrActual:    f.arrival?.actualTime?.utc ?? null,
+    arrTerminal:  f.arrival?.terminal ?? null,
+    arrGate:      f.arrival?.gate ?? null,
+    aircraft:     f.aircraft?.model ?? null,
+    aircraftReg:  f.aircraft?.reg ?? null,
+    date,
+  };
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    const { depIata, arrIata, date } = await req.json();
+    const body = await req.json();
+    const { mode, flightNumber, depIata, arrIata, date } = body;
 
+    const rapidHeaders = {
+      "X-RapidAPI-Key":  RAPIDAPI_KEY,
+      "X-RapidAPI-Host": RAPIDAPI_HOST,
+    };
+
+    // ── byNumber mode ──────────────────────────────────────────────────────────
+    if (mode === "byNumber") {
+      if (!flightNumber || !date) {
+        return new Response(
+          JSON.stringify({ error: "Missing flightNumber or date" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const from = `${date}T00:00`;
+      const to   = `${date}T23:59`;
+      const url  = `https://${RAPIDAPI_HOST}/flights/${encodeURIComponent(flightNumber.toUpperCase())}/${from}/${to}?withAircraftImage=false&withLocation=false`;
+
+      const res = await fetch(url, { headers: rapidHeaders });
+
+      if (!res.ok) {
+        return new Response(
+          JSON.stringify({ error: `AeroDataBox error: ${res.status}` }),
+          { status: res.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const json = await res.json();
+      // AeroDataBox returns an array for flight-by-number
+      const items: any[] = Array.isArray(json) ? json : (json.departures ?? []);
+      const flights = items.map((f: any) => mapFlight(f, date));
+
+      return new Response(
+        JSON.stringify({ flights }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── byRoute mode (default) ─────────────────────────────────────────────────
     if (!depIata || !arrIata || !date) {
       return new Response(
         JSON.stringify({ error: "Missing depIata, arrIata, or date" }),
@@ -29,12 +94,7 @@ serve(async (req) => {
     const to   = `${date}T23:59`;
     const url  = `https://${RAPIDAPI_HOST}/flights/airports/iata/${depIata.toUpperCase()}/${from}/${to}?direction=Departure&withLeg=true&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false`;
 
-    const res = await fetch(url, {
-      headers: {
-        "X-RapidAPI-Key":  RAPIDAPI_KEY,
-        "X-RapidAPI-Host": RAPIDAPI_HOST,
-      },
-    });
+    const res = await fetch(url, { headers: rapidHeaders });
 
     if (!res.ok) {
       return new Response(
@@ -49,29 +109,7 @@ serve(async (req) => {
 
     const filtered = departures
       .filter((f: any) => f.arrival?.airport?.iata?.toUpperCase() === dest)
-      .map((f: any) => ({
-        flightNumber: f.number ?? "—",
-        airline:      f.airline?.name ?? "Unknown",
-        airlineIata:  f.airline?.iata ?? "",
-        status:       f.status ?? "unknown",
-        depAirport:   f.departure?.airport?.name ?? "",
-        depIata:      f.departure?.airport?.iata ?? "",
-        depScheduled: f.departure?.scheduledTime?.utc ?? null,
-        depEstimated: f.departure?.revisedTime?.utc ?? null,
-        depActual:    f.departure?.actualTime?.utc ?? null,
-        depTerminal:  f.departure?.terminal ?? null,
-        depGate:      f.departure?.gate ?? null,
-        arrAirport:   f.arrival?.airport?.name ?? "",
-        arrIata:      f.arrival?.airport?.iata ?? "",
-        arrScheduled: f.arrival?.scheduledTime?.utc ?? null,
-        arrEstimated: f.arrival?.revisedTime?.utc ?? null,
-        arrActual:    f.arrival?.actualTime?.utc ?? null,
-        arrTerminal:  f.arrival?.terminal ?? null,
-        arrGate:      f.arrival?.gate ?? null,
-        aircraft:     f.aircraft?.model ?? null,
-        aircraftReg:  f.aircraft?.reg ?? null,
-        date,
-      }));
+      .map((f: any) => mapFlight(f, date));
 
     return new Response(
       JSON.stringify({ flights: filtered }),
