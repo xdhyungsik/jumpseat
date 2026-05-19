@@ -115,46 +115,36 @@ function Section({ label, count, color = "text-white/40", defaultOpen = true, ch
   );
 }
 
-// ─── Individual Flight Row (shown inside expanded cards) ──────────────────────
+// ─── Simple flight list row ───────────────────────────────────────────────────
 
-function FlightRow({ r }) {
-  const dep1 = formatTime(r.leg1?.depScheduled);
-  const arr1 = formatTime(r.leg1?.arrScheduled);
-  const dep2 = r.leg2 ? formatTime(r.leg2?.depScheduled) : null;
-  const arr2 = r.leg2 ? formatTime(r.leg2?.arrScheduled) : null;
+function LegFlight({ f }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs font-mono">
+      <span className="text-white/30 w-5">{f.airlineIata}</span>
+      <span className="text-white font-bold">{formatTime(f.depScheduled)}</span>
+      <span className="text-white/20">→</span>
+      <span className="text-white font-bold">{formatTime(f.arrScheduled)}</span>
+      <span className="text-white/25 ml-1">{f.flightNumber}</span>
+    </div>
+  );
+}
+
+function LegList({ label, flights }) {
+  // Deduplicate by flight number
+  const seen = new Set();
+  const unique = flights.filter(f => {
+    const key = f.flightNumber + f.depScheduled;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => (a.depScheduled ?? "").localeCompare(b.depScheduled ?? ""));
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-white/[0.03] border border-white/5 text-xs font-mono">
-      {/* Leg 1 */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-white/30">{r.leg1?.airlineIata}</span>
-        <span className="text-white font-bold">{dep1}</span>
-        <span className="text-white/20">→</span>
-        <span className="text-white font-bold">{arr1}</span>
-        <span className="text-white/25 text-[10px]">{r.leg1?.flightNumber}</span>
+    <div>
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">{label}</div>
+      <div className="flex flex-col gap-1">
+        {unique.map((f, i) => <LegFlight key={i} f={f} />)}
       </div>
-
-      {/* Layover */}
-      {r.leg2 && (
-        <>
-          <div className="h-px flex-1 bg-white/10" />
-          <span className="text-white/30 whitespace-nowrap">{fmtMins(r.layoverMin)} cnx</span>
-          <div className="h-px flex-1 bg-white/10" />
-        </>
-      )}
-
-      {/* Leg 2 */}
-      {r.leg2 && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-white/30">{r.leg2?.airlineIata}</span>
-          <span className="text-white font-bold">{dep2}</span>
-          <span className="text-white/20">→</span>
-          <span className="text-white font-bold">{arr2}</span>
-          <span className="text-white/25 text-[10px]">{r.leg2?.flightNumber}</span>
-        </div>
-      )}
-
-      <div className="ml-auto text-white/20 whitespace-nowrap">{fmtMins(r.totalMin)}</div>
     </div>
   );
 }
@@ -186,8 +176,8 @@ function DirectCard({ routings, dep, arr, airlineFilter }) {
         </div>
       </button>
       {expanded && (
-        <div className="px-4 pb-4 flex flex-col gap-1.5 border-t border-white/5 pt-3">
-          {sorted.map((r, i) => <FlightRow key={i} r={r} />)}
+        <div className="px-4 pb-4 border-t border-white/5 pt-3">
+          <LegList label={`${dep} → ${arr}`} flights={routings.map(r => r.leg1).filter(Boolean)} />
         </div>
       )}
     </div>
@@ -200,10 +190,9 @@ function OneStopCard({ via, routings, dep, arr, airlineFilter }) {
   const [expanded, setExpanded] = useState(false);
   const leg1Carriers = uniq(routings.map(r => r.leg1?.airlineIata));
   const leg2Carriers = uniq(routings.map(r => r.leg2?.airlineIata));
-  const viaName      = routings[0]?.viaAirport ?? via;
-  const minMins      = Math.min(...routings.map(r => r.totalMin).filter(Boolean));
-  const minLayover   = Math.min(...routings.map(r => r.layoverMin).filter(Boolean));
-  const sorted       = [...routings].sort((a, b) => (a.leg1?.depScheduled ?? "").localeCompare(b.leg1?.depScheduled ?? ""));
+  const viaName    = routings[0]?.viaAirport ?? via;
+  const minMins    = Math.min(...routings.map(r => r.totalMin).filter(Boolean));
+  const minLayover = Math.min(...routings.map(r => r.layoverMin).filter(Boolean));
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
@@ -225,8 +214,9 @@ function OneStopCard({ via, routings, dep, arr, airlineFilter }) {
         </div>
       </button>
       {expanded && (
-        <div className="px-4 pb-4 flex flex-col gap-1.5 border-t border-white/5 pt-3">
-          {sorted.map((r, i) => <FlightRow key={i} r={r} />)}
+        <div className="px-4 pb-4 border-t border-white/5 pt-3 flex flex-col gap-4">
+          <LegList label={`${dep} → ${via}`} flights={routings.map(r => r.leg1).filter(Boolean)} />
+          <LegList label={`${via} → ${arr}`} flights={routings.map(r => r.leg2).filter(Boolean)} />
         </div>
       )}
     </div>
